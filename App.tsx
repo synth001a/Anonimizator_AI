@@ -13,7 +13,8 @@ import {
   AlertTriangle,
   Key,
   Lock,
-  RefreshCw
+  ExternalLink,
+  ChevronRight
 } from 'lucide-react';
 import { PiiCategory, RedactionMark, PDFPageData, RedactionSettings } from './types';
 import { detectPiiInImage } from './geminiService';
@@ -39,53 +40,44 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sprawdzanie czy klucz jest już dostępny w systemie
+  // Sprawdzanie dostępności klucza przy starcie
   useEffect(() => {
-    const checkKeyStatus = async () => {
-      try {
-        // @ts-ignore
-        if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+    const checkStatus = async () => {
+      // Jeśli klucz jest już wstrzyknięty do środowiska, wchodzimy od razu
+      const envKey = process.env.API_KEY;
+      if (envKey && envKey !== 'UNDEFINED' && envKey !== '') {
+        setHasApiKey(true);
+        return;
+      }
+
+      // @ts-ignore
+      if (window.aistudio?.hasSelectedApiKey) {
+        try {
           // @ts-ignore
-          const result = await window.aistudio.hasSelectedApiKey();
-          if (result) {
-            setHasApiKey(true);
-            return;
-          }
+          const selected = await window.aistudio.hasSelectedApiKey();
+          if (selected) setHasApiKey(true);
+        } catch (e) {
+          console.log("Czekam na interakcję użytkownika z kluczem...");
         }
-        
-        // Jeśli nie ma mechanizmu selekcji, sprawdzamy process.env
-        const envKey = process.env.API_KEY;
-        if (envKey && envKey !== 'UNDEFINED' && envKey.length > 5) {
-          setHasApiKey(true);
-        }
-      } catch (e) {
-        console.error("Błąd sprawdzania statusu klucza:", e);
       }
     };
-    checkKeyStatus();
+    checkStatus();
   }, []);
 
   const handleOpenKeySelector = async () => {
     setError(null);
     try {
       // @ts-ignore
-      if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
+      if (window.aistudio?.openSelectKey) {
         // @ts-ignore
         await window.aistudio.openSelectKey();
-        // Zgodnie z wytycznymi: zakładamy sukces po wywołaniu okna
-        setHasApiKey(true);
-      } else {
-        // Fallback: jeśli nie jesteśmy w środowisku AI Studio, spróbujmy po prostu "wpuścić" użytkownika 
-        // jeśli API_KEY jest zdefiniowany w środowisku
-        const envKey = process.env.API_KEY;
-        if (envKey && envKey !== 'UNDEFINED') {
-          setHasApiKey(true);
-        } else {
-          setError("Twój system nie wspiera automatycznego wyboru klucza. Upewnij się, że masz ustawiony API_KEY w ustawieniach projektu.");
-        }
       }
+      // Niezależnie od tego, czy okno się otworzyło, pozwalamy przejść do aplikacji.
+      // Ewentualny błąd braku klucza obsłuży geminiService podczas próby analizy.
+      setHasApiKey(true);
     } catch (e: any) {
-      setError("Nie udało się otworzyć okna wyboru klucza: " + e.message);
+      // Fallback: jeśli coś poszło nie tak z oknem, i tak wpuszczamy użytkownika
+      setHasApiKey(true);
     }
   };
 
@@ -109,7 +101,7 @@ export default function App() {
       const loadedPages: PDFPageData[] = [];
 
       for (let i = 1; i <= pdf.numPages; i++) {
-        setProcessingStatus(`Przygotowanie strony ${i}/${pdf.numPages}...`);
+        setProcessingStatus(`Konwersja strony ${i}/${pdf.numPages}...`);
         const page = await pdf.getPage(i);
         const viewport = page.getViewport({ scale: 1.5 });
         const canvas = document.createElement('canvas');
@@ -127,7 +119,7 @@ export default function App() {
       }
       setPages(loadedPages);
     } catch (err: any) {
-      setError("Błąd wczytywania PDF: " + err.message);
+      setError("Błąd PDF: " + err.message);
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
@@ -142,7 +134,7 @@ export default function App() {
 
     try {
       for (const page of pages) {
-        setProcessingStatus(`AI skanuje stronę ${page.pageNumber}...`);
+        setProcessingStatus(`Skanowanie strony ${page.pageNumber}...`);
         const base64 = page.imageUrl.split(',')[1];
         const results = await detectPiiInImage(base64, settings.categories, settings.customKeywords);
 
@@ -150,26 +142,26 @@ export default function App() {
           newRedactions.push({
             id: `r-${page.pageNumber}-${idx}-${Date.now()}`,
             category: res.category,
-            // Naprawa błędu React #31: rzutowanie wszystkiego na string
-            text: res.text && typeof res.text === 'object' ? JSON.stringify(res.text) : String(res.text || ''),
+            // Naprawa React #31: rzutujemy wynik na String, by uniknąć renderowania obiektów
+            text: String(res.text || ''),
             pageNumber: page.pageNumber,
             confidence: 1,
             box: { 
-              ymin: Number(res.box_2d[0]), 
-              xmin: Number(res.box_2d[1]), 
-              ymax: Number(res.box_2d[2]), 
-              xmax: Number(res.box_2d[3]) 
+              ymin: res.box_2d[0], 
+              xmin: res.box_2d[1], 
+              ymax: res.box_2d[2], 
+              xmax: res.box_2d[3] 
             }
           });
         });
       }
       setRedactions(newRedactions);
-      setProcessingStatus('Analiza ukończona!');
+      setProcessingStatus('Zakończono analizę.');
       setTimeout(() => setProcessingStatus(''), 3000);
     } catch (err: any) {
       setError(err.message);
-      // Jeśli klucz jest nieaktywny/niepoprawny, resetujemy stan klucza
-      if (err.message.includes("not found") || err.message.includes("API key")) {
+      // Jeśli błąd dotyczy klucza, pozwalamy użytkownikowi wybrać go ponownie
+      if (err.message.includes("API key") || err.message.includes("autoryzacji")) {
         setHasApiKey(false);
       }
     } finally {
@@ -180,7 +172,7 @@ export default function App() {
   const downloadRedactedPdf = async () => {
     if (pages.length === 0) return;
     setIsProcessing(true);
-    setProcessingStatus('Generowanie PDF...');
+    setProcessingStatus('Przygotowywanie pliku...');
     try {
       const { jsPDF } = await import('jspdf');
       const doc = new jsPDF({
@@ -204,285 +196,265 @@ export default function App() {
           doc.rect(x, y, w, h, 'F');
         });
       }
-      doc.save(`${file?.name.replace('.pdf', '')}_anonimizowany.pdf`);
+      doc.save(`zanonimizowany_${file?.name || 'dokument'}.pdf`);
     } catch (err: any) {
-      setError("Błąd pobierania: " + err.message);
+      setError("Błąd eksportu: " + err.message);
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
     }
   };
 
+  if (!hasApiKey) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl p-10 text-center border border-slate-100 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-600 to-purple-600"></div>
+          <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
+            <Lock size={40} />
+          </div>
+          <h2 className="text-3xl font-black text-slate-800 mb-4 tracking-tight">Witaj w Anonimizator.AI</h2>
+          <p className="text-slate-500 mb-8 leading-relaxed text-sm">
+            Narzędzie wykorzystuje sztuczną inteligencję do ochrony Twoich danych. 
+            Aby zacząć, podłącz klucz Gemini API.
+          </p>
+          
+          <button 
+            onClick={handleOpenKeySelector}
+            className="group w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 active:scale-95 mb-6"
+          >
+            <Key size={20} />
+            Podłącz klucz i zacznij
+            <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
+          </button>
+
+          <div className="flex flex-col gap-2">
+            <a 
+              href="https://aistudio.google.com/app/apikey" 
+              target="_blank" 
+              className="text-[10px] text-slate-400 hover:text-indigo-600 flex items-center justify-center gap-1 font-bold transition-colors uppercase tracking-wider"
+            >
+              Pobierz darmowy klucz Gemini <ExternalLink size={10} />
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 font-sans text-slate-900">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-xl shadow-lg">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 px-8 py-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="bg-indigo-600 p-2.5 rounded-xl shadow-lg shadow-indigo-200">
             <ShieldCheck className="text-white w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">AnonimizatorPDF.AI</h1>
-            <p className="text-[10px] text-slate-400 font-bold uppercase">Automatyczne RODO</p>
+            <h1 className="text-xl font-black tracking-tight text-slate-800">Anonimizator.AI</h1>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">System aktywny</span>
+            </div>
           </div>
         </div>
         
         <div className="flex items-center gap-3">
           <button 
-            onClick={handleOpenKeySelector}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all font-bold text-sm ${
-              hasApiKey ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-amber-500 text-white shadow-lg shadow-amber-200 hover:bg-amber-600'
-            }`}
+            disabled={isProcessing}
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 transition-all font-bold text-sm border border-slate-200/50"
           >
-            {hasApiKey ? <ShieldCheck size={18} /> : <Key size={18} />}
-            {hasApiKey ? 'Połączono z AI' : 'Konfiguruj Klucz API'}
+            <FileUp size={18} />
+            {file ? 'Zmień dokument' : 'Wczytaj PDF'}
           </button>
-          
-          {hasApiKey && (
-            <>
-              <button 
-                disabled={isProcessing}
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-all font-medium text-sm disabled:opacity-50"
-              >
-                <FileUp size={18} />
-                {file ? 'Zmień Plik' : 'Wgraj PDF'}
-              </button>
-              <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".pdf" />
+          <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".pdf" />
 
-              {redactions.length > 0 && (
-                <button 
-                  disabled={isProcessing}
-                  onClick={downloadRedactedPdf}
-                  className="flex items-center gap-2 px-5 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all font-bold text-sm shadow-lg shadow-indigo-100"
-                >
-                  <Download size={18} />
-                  Pobierz Wynik
-                </button>
-              )}
-            </>
+          {redactions.length > 0 && (
+            <button 
+              disabled={isProcessing}
+              onClick={downloadRedactedPdf}
+              className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all font-black text-sm shadow-xl shadow-indigo-100"
+            >
+              <Download size={18} />
+              Pobierz Wynik
+            </button>
           )}
+
+          <button 
+            onClick={() => setHasApiKey(false)}
+            className="p-2.5 text-slate-400 hover:text-slate-600 transition-colors bg-slate-50 rounded-xl border border-slate-200/50"
+            title="Ustawienia klucza"
+          >
+            <Settings size={18} />
+          </button>
         </div>
       </header>
 
       <main className="flex-1 flex overflow-hidden">
-        {!hasApiKey ? (
-          <div className="flex-1 flex items-center justify-center p-6 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-50/50 via-slate-50 to-slate-50">
-            <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 text-center border border-slate-100 relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
-              <div className="w-24 h-24 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
-                <Lock size={48} />
+        <aside className="w-84 border-r border-slate-200 bg-white overflow-y-auto p-8 space-y-8 flex flex-col">
+          {error && (
+            <div className="bg-red-50 border border-red-200 p-5 rounded-2xl flex gap-4 text-red-700 text-xs animate-in slide-in-from-top-2 duration-300">
+              <AlertTriangle className="shrink-0 text-red-500" size={20} />
+              <div className="space-y-1">
+                <p className="font-black uppercase tracking-wider text-[10px]">Wykryto problem</p>
+                <p className="font-medium leading-relaxed">{error}</p>
               </div>
-              <h2 className="text-2xl font-black text-slate-800 mb-4 tracking-tight">Wymagany Klucz API</h2>
-              <p className="text-slate-500 mb-8 leading-relaxed text-sm">
-                Aplikacja wykorzystuje model Gemini do analizy dokumentów. 
-                Połącz swój darmowy klucz z <a href="https://aistudio.google.com/" target="_blank" className="text-indigo-600 font-bold hover:underline">Google AI Studio</a>, aby odblokować funkcje.
-              </p>
-              
-              {error && (
-                <div className="mb-6 p-4 bg-red-50 text-red-600 text-xs rounded-xl border border-red-100 flex items-center gap-2">
-                  <AlertCircle size={14} className="shrink-0" />
-                  {error}
-                </div>
-              )}
-
-              <button 
-                onClick={handleOpenKeySelector}
-                className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 active:scale-[0.98]"
-              >
-                <Key size={20} />
-                Podłącz klucz i zacznij
-              </button>
-              
-              <p className="mt-6 text-[10px] text-slate-400 font-medium">
-                Twoje dane nie opuszczają przeglądarki w celach innych niż analiza przez model Gemini.
-              </p>
             </div>
-          </div>
-        ) : (
-          <>
-            <aside className="w-84 border-r border-slate-200 bg-white overflow-y-auto p-6 space-y-8 flex flex-col">
-              {error && (
-                <div className="bg-red-50 border border-red-200 p-4 rounded-xl flex gap-3 text-red-700 text-xs animate-in fade-in slide-in-from-top-2">
-                  <AlertTriangle className="shrink-0" size={18} />
-                  <div>
-                    <p className="font-bold">Błąd AI</p>
-                    <p className="opacity-90">{error}</p>
-                    <button 
-                      onClick={handleOpenKeySelector}
-                      className="mt-2 text-indigo-600 font-bold flex items-center gap-1 hover:underline"
-                    >
-                      <RefreshCw size={10} /> Spróbuj wybrać klucz ponownie
-                    </button>
-                  </div>
-                </div>
-              )}
+          )}
 
-              <div className="flex-1 space-y-8">
-                <section>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                    <Settings size={12} className="text-indigo-500" /> Co mamy zanonimizować?
-                  </div>
-                  <div className="grid grid-cols-1 gap-1">
-                    {Object.values(PiiCategory).map(cat => (
-                      <label key={cat} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 cursor-pointer group transition-all border border-transparent hover:border-slate-100">
-                        <input 
-                          type="checkbox" 
-                          className="w-5 h-5 text-indigo-600 rounded-lg border-slate-300 focus:ring-indigo-500 transition-all"
-                          checked={settings.categories.includes(cat)}
-                          onChange={() => setSettings(s => ({...s, categories: s.categories.includes(cat) ? s.categories.filter(c => c !== cat) : [...s.categories, cat]}))}
-                        />
-                        <span className="text-sm font-semibold text-slate-600 group-hover:text-slate-900">{cat}</span>
-                      </label>
-                    ))}
-                  </div>
-                </section>
-
-                <section>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <Info size={12} className="text-indigo-500" /> Własne słowa
-                  </div>
-                  <div className="flex gap-2">
+          <div className="flex-1 space-y-8">
+            <section>
+              <div className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-5 flex items-center gap-2">
+                <ShieldCheck size={14} className="text-indigo-500" /> Co ukrywamy?
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                {Object.values(PiiCategory).map(cat => (
+                  <label key={cat} className="flex items-center justify-between p-3.5 rounded-xl hover:bg-indigo-50/50 cursor-pointer transition-all border border-transparent hover:border-indigo-100 group">
+                    <span className="text-[13px] font-bold text-slate-600 group-hover:text-indigo-700 transition-colors">{cat}</span>
                     <input 
-                      type="text" value={newKeyword} onChange={(e) => setNewKeyword(e.target.value)}
-                      placeholder="Wpisz i naciśnij Enter..."
-                      className="flex-1 text-xs border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                      onKeyDown={(e) => e.key === 'Enter' && newKeyword && (setSettings(s => ({...s, customKeywords: [...s.customKeywords, newKeyword]})), setNewKeyword(''))}
+                      type="checkbox" 
+                      className="w-5 h-5 text-indigo-600 rounded-lg border-slate-300 focus:ring-indigo-500 transition-all"
+                      checked={settings.categories.includes(cat)}
+                      onChange={() => setSettings(s => ({...s, categories: s.categories.includes(cat) ? s.categories.filter(c => c !== cat) : [...s.categories, cat]}))}
                     />
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 mt-3">
-                    {settings.customKeywords.map(k => (
-                      <span key={k} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-2 border border-indigo-100">
-                        {k}
-                        <button onClick={() => setSettings(s => ({...s, customKeywords: s.customKeywords.filter(x => x !== k)}))} className="hover:text-indigo-800 transition-colors">
-                          <Trash2 size={12} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                </section>
-
-                {redactions.length > 0 && (
-                  <section className="pt-6 border-t border-slate-100">
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Wykryte elementy ({redactions.length})</span>
-                      <button 
-                        onClick={() => setShowSensitive(!showSensitive)} 
-                        className="text-indigo-600 p-2 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
-                        title={showSensitive ? "Ukryj podgląd" : "Pokaż co AI znalazło"}
-                      >
-                        {showSensitive ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 scrollbar-thin">
-                      {redactions.map(r => (
-                        <div key={r.id} className="text-[11px] p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center group hover:bg-white hover:shadow-sm transition-all">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[9px] font-bold text-slate-400 uppercase">{r.category}</span>
-                            <span className={showSensitive ? 'text-slate-700 font-bold' : 'bg-slate-200 text-transparent rounded px-1 select-none'}>
-                              {String(r.text)}
-                            </span>
-                          </div>
-                          <button 
-                            onClick={() => setRedactions(prev => prev.filter(red => red.id !== r.id))} 
-                            className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                )}
+                  </label>
+                ))}
               </div>
+            </section>
 
-              <div className="pt-6 mt-auto">
-                <button 
-                  disabled={!file || isProcessing}
-                  onClick={startAnonymization}
-                  className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-xl disabled:bg-slate-200 disabled:shadow-none flex items-center justify-center gap-3 active:scale-[0.98]"
-                >
-                  {isProcessing ? <Loader2 className="animate-spin" size={20} /> : <ShieldCheck size={20} />}
-                  {isProcessing ? 'Analizuję dokument...' : 'Uruchom Anonimizację'}
-                </button>
-                {processingStatus && (
-                  <div className="mt-4 flex flex-col items-center gap-2">
-                    <p className="text-[11px] text-indigo-600 font-bold animate-pulse text-center">{processingStatus}</p>
-                    <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
-                      <div className="bg-indigo-600 h-full animate-progress" style={{ width: '100%' }}></div>
-                    </div>
-                  </div>
-                )}
+            <section>
+              <div className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Własne frazy</div>
+              <div className="relative">
+                <input 
+                  type="text" value={newKeyword} onChange={(e) => setNewKeyword(e.target.value)}
+                  placeholder="Np. nazwa firmy..."
+                  className="w-full text-sm border border-slate-200 rounded-xl px-4 py-3.5 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-slate-50"
+                  onKeyDown={(e) => e.key === 'Enter' && newKeyword && (setSettings(s => ({...s, customKeywords: [...s.customKeywords, newKeyword]})), setNewKeyword(''))}
+                />
               </div>
-            </aside>
+              <div className="flex flex-wrap gap-2 mt-4">
+                {settings.customKeywords.map(k => (
+                  <span key={k} className="bg-white text-slate-600 px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-2 border border-slate-200 shadow-sm">
+                    {k}
+                    <button onClick={() => setSettings(s => ({...s, customKeywords: s.customKeywords.filter(x => x !== k)}))} className="text-slate-400 hover:text-red-500 transition-colors">
+                      <Trash2 size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </section>
 
-            <section className="flex-1 bg-slate-100 overflow-y-auto p-12 flex flex-col items-center">
-              {!file ? (
-                <div className="text-center mt-20 animate-in fade-in zoom-in-95 duration-500">
-                  <div className="w-24 h-24 bg-white rounded-[2rem] shadow-xl flex items-center justify-center mx-auto mb-8 text-slate-200 border border-slate-50">
-                    <FileUp size={48} />
-                  </div>
-                  <h2 className="text-3xl font-black text-slate-800 tracking-tight">Gotowy do pracy?</h2>
-                  <p className="text-slate-500 mt-3 text-lg font-medium">Wgraj dokument PDF, aby rozpocząć proces.</p>
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="mt-8 px-8 py-3 bg-white text-slate-800 rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all border border-slate-200 active:scale-95"
-                  >
-                    Wybierz plik z dysku
+            {redactions.length > 0 && (
+              <section className="pt-8 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-5">
+                  <span className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Znalezione dane</span>
+                  <button onClick={() => setShowSensitive(!showSensitive)} className="text-indigo-600 p-2 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-all">
+                    {showSensitive ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
-              ) : (
-                <div className="space-y-12 max-w-4xl w-full pb-32 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                  {pages.map(page => (
-                    <div 
-                      key={page.pageNumber} 
-                      className="relative bg-white shadow-2xl rounded-2xl overflow-hidden mx-auto border border-slate-200 group" 
-                      style={{ width: page.width, height: page.height }}
-                    >
-                      <img src={page.imageUrl} className="absolute inset-0 w-full h-full object-contain" alt={`Strona ${page.pageNumber}`} />
-                      
-                      <div className="absolute inset-0 pointer-events-none">
-                        {redactions.filter(r => r.pageNumber === page.pageNumber).map(red => (
-                          <div 
-                            key={red.id} 
-                            className="absolute bg-black group-hover:bg-slate-900/90 cursor-pointer hover:ring-2 hover:ring-indigo-400 transition-all z-10 pointer-events-auto rounded-[2px]"
-                            onClick={() => setRedactions(p => p.filter(r => r.id !== red.id))}
-                            style={{ 
-                              top: `${red.box.ymin / 10}%`, 
-                              left: `${red.box.xmin / 10}%`, 
-                              height: `${(red.box.ymax - red.box.ymin) / 10}%`, 
-                              width: `${(red.box.xmax - red.box.xmin) / 10}%` 
-                            }}
-                          >
-                            <div className="absolute inset-0 opacity-0 hover:opacity-100 bg-red-500/10 flex items-center justify-center transition-opacity">
-                              <Trash2 className="text-white drop-shadow-md" size={16} />
-                            </div>
-                          </div>
-                        ))}
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-2 scrollbar-thin">
+                  {redactions.map(r => (
+                    <div key={r.id} className="text-[11px] p-3.5 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center group hover:bg-white hover:shadow-md hover:border-indigo-100 transition-all">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">{r.category}</span>
+                        <span className={showSensitive ? 'text-slate-800 font-black' : 'bg-slate-200 text-transparent rounded px-1 select-none'}>
+                          {String(r.text)}
+                        </span>
                       </div>
-
-                      <div className="absolute top-6 right-6 bg-white/80 backdrop-blur-md px-4 py-2 rounded-2xl text-[11px] font-black text-slate-800 shadow-xl border border-white/50 uppercase tracking-widest flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
-                        Strona {page.pageNumber} / {pages.length}
-                      </div>
+                      <button onClick={() => setRedactions(prev => prev.filter(red => red.id !== r.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   ))}
                 </div>
-              )}
-            </section>
-          </>
-        )}
+              </section>
+            )}
+          </div>
+
+          <div className="pt-8 mt-auto">
+            <button 
+              disabled={!file || isProcessing}
+              onClick={startAnonymization}
+              className="w-full bg-slate-900 text-white py-4.5 rounded-[1.25rem] font-black text-base hover:bg-slate-800 transition-all shadow-2xl disabled:bg-slate-100 disabled:text-slate-300 flex items-center justify-center gap-4 active:scale-95"
+            >
+              {isProcessing ? <Loader2 className="animate-spin" size={22} /> : <ShieldCheck size={22} />}
+              {isProcessing ? 'Przetwarzanie...' : 'Anonimizuj teraz'}
+            </button>
+            {processingStatus && (
+              <div className="mt-5 flex flex-col items-center gap-3">
+                <p className="text-[11px] text-indigo-600 font-black uppercase tracking-widest animate-pulse">{processingStatus}</p>
+                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                  <div className="bg-indigo-600 h-full w-full animate-progress-indefinite"></div>
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <section className="flex-1 bg-slate-100 overflow-y-auto p-12 flex flex-col items-center">
+          {!file ? (
+            <div className="text-center mt-32 max-w-sm">
+              <div className="w-24 h-24 bg-white rounded-[2.5rem] shadow-xl flex items-center justify-center mx-auto mb-10 text-slate-200 border border-slate-50 group hover:scale-110 transition-transform duration-500">
+                <FileUp size={48} className="group-hover:text-indigo-400 transition-colors" />
+              </div>
+              <h2 className="text-3xl font-black text-slate-800 tracking-tight mb-4">Gotowy do ochrony?</h2>
+              <p className="text-slate-500 font-medium leading-relaxed">Wgraj plik PDF, aby automatycznie ukryć dane wrażliwe za pomocą AI.</p>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="mt-10 px-10 py-4 bg-white text-slate-900 rounded-[1.25rem] font-black shadow-lg hover:shadow-2xl transition-all border border-slate-100 active:scale-95"
+              >
+                Wybierz dokument
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-16 max-w-4xl w-full pb-48 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+              {pages.map(page => (
+                <div 
+                  key={page.pageNumber} 
+                  className="relative bg-white shadow-[0_32px_64px_-16px_rgba(0,0,0,0.15)] rounded-[2rem] overflow-hidden mx-auto border border-slate-200 group" 
+                  style={{ width: page.width, height: page.height }}
+                >
+                  <img src={page.imageUrl} className="absolute inset-0 w-full h-full object-contain" alt={`Strona ${page.pageNumber}`} />
+                  
+                  {redactions.filter(r => r.pageNumber === page.pageNumber).map(red => (
+                    <div 
+                      key={red.id} 
+                      className="absolute bg-black group/box cursor-pointer hover:ring-2 hover:ring-indigo-400 transition-all z-10 rounded-[2px]"
+                      onClick={() => setRedactions(p => p.filter(r => r.id !== red.id))}
+                      style={{ 
+                        top: `${red.box.ymin / 10}%`, 
+                        left: `${red.box.xmin / 10}%`, 
+                        height: `${(red.box.ymax - red.box.ymin) / 10}%`, 
+                        width: `${(red.box.xmax - red.box.xmin) / 10}%` 
+                      }}
+                    >
+                      <div className="absolute inset-0 opacity-0 group-hover/box:opacity-100 bg-red-500/20 flex items-center justify-center backdrop-blur-[1px]">
+                        <Trash2 className="text-white drop-shadow-md" size={16} />
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="absolute top-8 right-8 bg-white/80 backdrop-blur-xl px-5 py-2.5 rounded-2xl text-[11px] font-black text-slate-800 uppercase tracking-widest border border-white/50 shadow-2xl flex items-center gap-3">
+                    <span className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>
+                    Strona {page.pageNumber} z {pages.length}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </main>
-      
+
       <style>{`
-        @keyframes progress {
+        @keyframes progress-indefinite {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
-        .animate-progress {
-          animation: progress 2s infinite ease-in-out;
+        .animate-progress-indefinite {
+          animation: progress-indefinite 1.5s infinite ease-in-out;
         }
         .scrollbar-thin::-webkit-scrollbar {
-          width: 4px;
+          width: 5px;
         }
         .scrollbar-thin::-webkit-scrollbar-track {
           background: transparent;
@@ -490,6 +462,9 @@ export default function App() {
         .scrollbar-thin::-webkit-scrollbar-thumb {
           background: #e2e8f0;
           border-radius: 10px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+          background: #cbd5e1;
         }
       `}</style>
     </div>
