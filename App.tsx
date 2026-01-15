@@ -1,20 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  FileUp, 
-  ShieldCheck, 
-  Settings, 
-  Download, 
-  Loader2, 
-  AlertCircle,
-  Eye,
-  EyeOff,
-  Trash2,
-  Info,
-  AlertTriangle,
-  Key,
-  Lock,
-  ExternalLink,
-  ChevronRight
+  FileUp, ShieldCheck, Settings, Download, Loader2, 
+  AlertTriangle, Eye, EyeOff, Trash2, Key, Lock 
 } from 'lucide-react';
 import { PiiCategory, RedactionMark, PDFPageData, RedactionSettings } from './types';
 import { detectPiiInImage } from './geminiService';
@@ -24,7 +11,10 @@ const pdfjsLib = window['pdfjs-dist/build/pdf'];
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 export default function App() {
-  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
+  // Zmiana: Przechowujemy klucz jako string, nie boolean
+  const [apiKey, setApiKey] = useState<string>('');
+  const hasApiKey = !!apiKey; // Flaga pomocnicza
+
   const [file, setFile] = useState<File | null>(null);
   const [pages, setPages] = useState<PDFPageData[]>([]);
   const [redactions, setRedactions] = useState<RedactionMark[]>([]);
@@ -42,15 +32,17 @@ export default function App() {
 
   useEffect(() => {
     const checkKey = async () => {
+      // 1. Sprawdzenie .env
       const envKey = process.env.API_KEY;
       if (envKey && envKey !== 'UNDEFINED' && envKey !== '') {
-        setHasApiKey(true);
+        setApiKey(envKey);
       }
+      // 2. Obsługa AI Studio (Project IDX)
       // @ts-ignore
-      else if (window.aistudio?.hasSelectedApiKey) {
-        // @ts-ignore
-        const selected = await window.aistudio.hasSelectedApiKey();
-        if (selected) setHasApiKey(true);
+      else if (window.aistudio?.getKey) {
+         // @ts-ignore
+         const key = await window.aistudio.getKey();
+         if(key) setApiKey(key);
       }
     };
     checkKey();
@@ -61,8 +53,15 @@ export default function App() {
     if (window.aistudio?.openSelectKey) {
       // @ts-ignore
       await window.aistudio.openSelectKey();
+      // Po wybraniu klucza próbujemy go pobrać
+      // @ts-ignore
+      const key = await window.aistudio.getKey();
+      if (key) setApiKey(key);
+    } else {
+      // Fallback: Jeśli nie ma integracji AI Studio, prosimy użytkownika (opcjonalnie można dodać input w UI)
+      const inputKey = prompt("Podaj klucz API Gemini:");
+      if (inputKey) setApiKey(inputKey);
     }
-    setHasApiKey(true);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -114,37 +113,47 @@ export default function App() {
     if (pages.length === 0) return;
     setIsProcessing(true);
     setError(null);
-    const newRedactions: RedactionMark[] = [];
-
+    
     try {
-      for (const page of pages) {
-        setProcessingStatus(`Analiza strony ${page.pageNumber}...`);
-        const base64 = page.imageUrl.split(',')[1];
-        const results = await detectPiiInImage(base64, settings.categories, settings.customKeywords);
+      setProcessingStatus('Analiza AI w toku (może chwilę potrwać)...');
+      
+      // Zmiana: Równoległe przetwarzanie wszystkich stron (Promise.all)
+      const promises = pages.map(async (page) => {
+        // Przekazujemy apiKey do funkcji
+        const results = await detectPiiInImage(
+          page.imageUrl, 
+          settings.categories, 
+          settings.customKeywords,
+          apiKey
+        );
 
-        results.forEach((res, idx) => {
-          newRedactions.push({
-            id: `r-${page.pageNumber}-${idx}-${Date.now()}`,
-            category: res.category,
-            text: String(res.text || ''),
-            pageNumber: page.pageNumber,
-            confidence: 1,
-            box: { 
-              ymin: res.box_2d[0], 
-              xmin: res.box_2d[1], 
-              ymax: res.box_2d[2], 
-              xmax: res.box_2d[3] 
-            }
-          });
-        });
-      }
+        return results.map((res, idx) => ({
+          id: `r-${page.pageNumber}-${idx}-${Date.now()}`,
+          category: res.category,
+          text: String(res.text || ''),
+          pageNumber: page.pageNumber,
+          confidence: 1,
+          box: { 
+            ymin: res.box_2d[0], 
+            xmin: res.box_2d[1], 
+            ymax: res.box_2d[2], 
+            xmax: res.box_2d[3] 
+          }
+        }));
+      });
+
+      const resultsArray = await Promise.all(promises);
+      const newRedactions = resultsArray.flat();
+
       setRedactions(newRedactions);
       setProcessingStatus('Analiza ukończona!');
       setTimeout(() => setProcessingStatus(''), 3000);
+
     } catch (err: any) {
+      console.error(err);
       setError(err.message);
       if (err.message.includes("Klucz API") || err.message.includes("autoryzacji")) {
-        setHasApiKey(false);
+        setApiKey(''); // Reset klucza w przypadku błędu
       }
     } finally {
       setIsProcessing(false);
@@ -243,7 +252,7 @@ export default function App() {
             </button>
           )}
 
-          <button onClick={() => setHasApiKey(false)} className="p-2 text-slate-400 hover:text-slate-600">
+          <button onClick={() => setApiKey('')} className="p-2 text-slate-400 hover:text-slate-600">
             <Settings size={18} />
           </button>
         </div>
