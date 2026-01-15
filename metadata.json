@@ -1,6 +1,6 @@
 {
-  "name": "SecureRedact AI",
-  "description": "An intelligent PDF anonymization tool that automatically detects and redacts personal information (PII) using Gemini AI vision capabilities.",
+  "name": "AnonimizatorPDF.AI",
+  "description": "Profesjonalne narzędzie AI do automatycznej anonimizacji danych wrażliwych (PII) w dokumentach PDF przy użyciu wizyjnych modeli Gemini.",
   "requestFramePermissions": [
     "camera"
   ]
