@@ -14,27 +14,26 @@ export const detectPiiInImage = async (
 ): Promise<DetectionResult[]> => {
   const apiKey = process.env.API_KEY;
   
-  if (!apiKey || apiKey === "UNDEFINED") {
-    throw new Error("Klucz API nie jest skonfigurowany.");
+  if (!apiKey || apiKey === "UNDEFINED" || apiKey === "") {
+    throw new Error("Klucz API nie został wybrany. Kliknij przycisk 'Konfiguruj Klucz API' u góry ekranu.");
   }
 
-  // Tworzymy instancję bezpośrednio przed użyciem, aby mieć pewność co do klucza
   const ai = new GoogleGenAI({ apiKey });
-  const model = 'gemini-3-flash-preview';
+  const modelName = 'gemini-3-flash-preview';
   
   const categoryList = targetCategories.join(', ');
   const keywordsText = customKeywords.length > 0 
     ? ` Dodatkowo oznacz te konkretne frazy: ${customKeywords.join(', ')}.`
     : '';
 
-  const prompt = `Jesteś ekspertem ochrony danych osobowych (RODO). Znajdź i oznacz dane wrażliwe.
+  const prompt = `Jesteś ekspertem RODO. Znajdź i oznacz dane osobowe na obrazku.
   Kategorie: ${categoryList}.${keywordsText}
-  Zwróć wynik jako JSON (tablica obiektów {text, category, box_2d: [ymin, xmin, ymax, xmax]}).
-  Współrzędne 0-1000.`;
+  Zwróć wynik jako JSON (tablica obiektów z polami: text, category, box_2d: [ymin, xmin, ymax, xmax]).
+  Współrzędne box_2d w skali 0-1000. Tylko JSON, bez komentarzy.`;
 
   try {
     const response = await ai.models.generateContent({
-      model,
+      model: modelName,
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
@@ -52,7 +51,9 @@ export const detectPiiInImage = async (
               category: { type: Type.STRING },
               box_2d: {
                 type: Type.ARRAY,
-                items: { type: Type.NUMBER }
+                items: { type: Type.NUMBER },
+                minItems: 4,
+                maxItems: 4
               }
             },
             required: ["text", "category", "box_2d"]
@@ -61,13 +62,20 @@ export const detectPiiInImage = async (
       },
     });
 
-    if (!response.text) return [];
-    return JSON.parse(response.text.trim());
-  } catch (error: any) {
-    console.error("Gemini Technical Error:", error);
-    if (error.message?.includes("entity was not found")) {
-      throw new Error("RE-AUTH: Wybrany projekt nie ma aktywnego API lub płatności. Wybierz klucz ponownie.");
+    const text = response.text;
+    if (!text) return [];
+    
+    try {
+      const parsed = JSON.parse(text.trim());
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error("JSON Error:", text);
+      return [];
     }
-    throw new Error(error.message || "Błąd komunikacji z AI.");
+  } catch (error: any) {
+    if (error.message?.includes("429")) {
+      throw new Error("Darmowy limit AI został wyczerpany. Spróbuj za minutę.");
+    }
+    throw new Error("Błąd AI: " + (error.message || "Błąd połączenia."));
   }
 };
