@@ -15,7 +15,7 @@ export const detectPiiInImage = async (
   const apiKey = process.env.API_KEY;
   
   if (!apiKey || apiKey === "UNDEFINED" || apiKey.length < 10) {
-    throw new Error("Klucz API nie został skonfigurowany. Dodaj API_KEY w ustawieniach Vercel (Environment Variables).");
+    throw new Error("Brak klucza API. Upewnij się, że dodałeś API_KEY w Settings -> Environment Variables na Vercel.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -26,9 +26,11 @@ export const detectPiiInImage = async (
     ? ` Dodatkowo oznacz te konkretne frazy: ${customKeywords.join(', ')}.`
     : '';
 
-  const prompt = `Jesteś ekspertem RODO. Znajdź i oznacz dane wrażliwe na obrazie dokumentu.
-  Kategorie do wykrycia: ${categoryList}.${keywordsText}
-  Zwróć JSON jako tablicę obiektów {text, category, box_2d: [ymin, xmin, ymax, xmax] (skala 0-1000)}.`;
+  const prompt = `Jesteś ekspertem ochrony danych osobowych (RODO). Twoim zadaniem jest znalezienie i oznaczenie danych wrażliwych na tym dokumencie.
+  Wyszukaj następujące kategorie: ${categoryList}.${keywordsText}
+  Zwróć wynik wyłącznie w formacie JSON jako tablicę obiektów:
+  { "text": "wykryty tekst", "category": "NAZWA_KATEGORII", "box_2d": [ymin, xmin, ymax, xmax] }
+  Współrzędne box_2d muszą być w skali 0-1000.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -62,7 +64,14 @@ export const detectPiiInImage = async (
     if (!response.text) return [];
     return JSON.parse(response.text.trim());
   } catch (error: any) {
-    console.error("Gemini Error:", error);
-    throw new Error("Błąd podczas analizy strony przez AI. Spróbuj ponownie za chwilę.");
+    console.error("Gemini Technical Error:", error);
+    // Przekazujemy konkretny błąd dalej
+    if (error.message?.includes("API_KEY_INVALID")) {
+      throw new Error("Twój klucz API jest nieprawidłowy.");
+    }
+    if (error.message?.includes("quota")) {
+      throw new Error("Przekroczono limit zapytań API (Quota exceeded).");
+    }
+    throw new Error(error.message || "Błąd komunikacji z modelem AI.");
   }
 };
