@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef } from 'react';
 import { 
   FileUp, 
@@ -81,9 +80,9 @@ export default function App() {
 
       setPages(loadedPages);
       setProcessingStatus('');
-    } catch (error) {
-      console.error("PDF Load Error:", error);
-      setError("Nie udało się otworzyć pliku PDF. Upewnij się, że plik nie jest uszkodzony.");
+    } catch (err: any) {
+      console.error("PDF Load Error:", err);
+      setError("Nie udało się otworzyć pliku PDF: " + err.message);
     } finally {
       setIsProcessing(false);
     }
@@ -97,7 +96,7 @@ export default function App() {
 
     try {
       for (const page of pages) {
-        setProcessingStatus(`Analiza strony ${page.pageNumber}...`);
+        setProcessingStatus(`Analiza strony ${page.pageNumber} przez AI...`);
         const base64 = page.imageUrl.split(',')[1];
         const results = await detectPiiInImage(base64, settings.categories, settings.customKeywords);
 
@@ -118,11 +117,12 @@ export default function App() {
         });
       }
       setRedactions(newRedactions);
-      setProcessingStatus('Analiza zakończona pomyślnie!');
+      setProcessingStatus('Gotowe!');
       setTimeout(() => setProcessingStatus(''), 4000);
     } catch (err: any) {
       console.error("Anonymization Error:", err);
-      setError("Wystąpił błąd podczas analizy przez AI. Spróbuj ponownie.");
+      // Wyświetlamy treść błędu przekazaną z geminiService
+      setError(err.message || "Nieznany błąd podczas analizy AI.");
     } finally {
       setIsProcessing(false);
     }
@@ -201,9 +201,9 @@ export default function App() {
       const fileName = file ? file.name.replace('.pdf', '_anonimizowany.pdf') : 'dokument_anonimizowany.pdf';
       doc.save(fileName);
       setProcessingStatus('Pobieranie rozpoczęte!');
-    } catch (error) {
-      console.error("PDF Generation Error:", error);
-      setError("Błąd podczas generowania pliku PDF.");
+    } catch (err: any) {
+      console.error("PDF Generation Error:", err);
+      setError("Błąd podczas generowania pliku PDF: " + err.message);
     } finally {
       setIsProcessing(false);
       setTimeout(() => setProcessingStatus(''), 2000);
@@ -273,8 +273,8 @@ export default function App() {
             <div className="bg-red-50 border border-red-100 p-3 rounded-lg flex gap-3 text-red-700 text-xs animate-in fade-in slide-in-from-top-2 duration-300">
               <AlertTriangle className="shrink-0" size={16} />
               <div>
-                <p className="font-bold mb-1">Uwaga!</p>
-                <p>{error}</p>
+                <p className="font-bold mb-1">Błąd systemu</p>
+                <p className="break-words">{error}</p>
               </div>
             </div>
           )}
