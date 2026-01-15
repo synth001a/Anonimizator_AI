@@ -10,7 +10,10 @@ import {
   Eye,
   EyeOff,
   Trash2,
-  CheckCircle2
+  CheckCircle2,
+  Info,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { PiiCategory, RedactionMark, PDFPageData, RedactionSettings } from './types';
 import { detectPiiInImage } from './geminiService';
@@ -26,6 +29,7 @@ export default function App() {
   const [redactions, setRedactions] = useState<RedactionMark[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<RedactionSettings>({
     categories: [PiiCategory.NAME, PiiCategory.SURNAME, PiiCategory.PESEL, PiiCategory.EMAIL],
     customKeywords: []
@@ -38,6 +42,7 @@ export default function App() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile && selectedFile.type === 'application/pdf') {
+      setError(null);
       setFile(selectedFile);
       setPages([]);
       setRedactions([]);
@@ -57,14 +62,14 @@ export default function App() {
       for (let i = 1; i <= pdf.numPages; i++) {
         setProcessingStatus(`Renderowanie strony ${i} z ${pdf.numPages}...`);
         const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale: 2.0 }); // Wyższa skala dla lepszej jakości przy pobieraniu
+        const viewport = page.getViewport({ scale: 1.5 });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d')!;
         canvas.height = viewport.height;
         canvas.width = viewport.width;
 
         await page.render({ canvasContext: context, viewport }).promise;
-        const imageUrl = canvas.toDataURL('image/jpeg', 0.9);
+        const imageUrl = canvas.toDataURL('image/jpeg', 0.85);
         
         loadedPages.push({
           pageNumber: i,
@@ -78,7 +83,7 @@ export default function App() {
       setProcessingStatus('');
     } catch (error) {
       console.error("PDF Load Error:", error);
-      alert("Błąd podczas wczytywania pliku PDF.");
+      setError("Nie udało się otworzyć pliku PDF. Upewnij się, że plik nie jest uszkodzony.");
     } finally {
       setIsProcessing(false);
     }
@@ -86,8 +91,8 @@ export default function App() {
 
   const startAnonymization = async () => {
     if (pages.length === 0) return;
-
     setIsProcessing(true);
+    setError(null);
     const newRedactions: RedactionMark[] = [];
 
     try {
@@ -98,7 +103,7 @@ export default function App() {
 
         results.forEach((res, idx) => {
           newRedactions.push({
-            id: `redact-${page.pageNumber}-${idx}`,
+            id: `redact-${page.pageNumber}-${idx}-${Date.now()}`,
             category: res.category,
             text: res.text,
             pageNumber: page.pageNumber,
@@ -113,13 +118,19 @@ export default function App() {
         });
       }
       setRedactions(newRedactions);
-      setProcessingStatus('Gotowe!');
-      setTimeout(() => setProcessingStatus(''), 3000);
-    } catch (error) {
-      console.error("Anonymization Error:", error);
-      alert("Wystąpił błąd podczas anonimizacji.");
+      setProcessingStatus('Analiza zakończona pomyślnie!');
+      setTimeout(() => setProcessingStatus(''), 4000);
+    } catch (err: any) {
+      console.error("Anonymization Error:", err);
+      setError("Wystąpił błąd podczas analizy przez AI. Spróbuj ponownie.");
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const clearAllRedactions = () => {
+    if (confirm('Czy na pewno chcesz usunąć wszystkie zaznaczenia?')) {
+      setRedactions([]);
     }
   };
 
@@ -156,11 +167,10 @@ export default function App() {
   const downloadRedactedPdf = async () => {
     if (pages.length === 0) return;
     
-    setProcessingStatus('Generowanie pliku PDF...');
+    setProcessingStatus('Generowanie PDF...');
     setIsProcessing(true);
 
     try {
-      // Dynamic import of jsPDF to keep main bundle light
       // @ts-ignore
       const { jsPDF } = await import('jspdf');
       
@@ -176,31 +186,24 @@ export default function App() {
         if (i > 0) {
           doc.addPage([page.width, page.height], page.width > page.height ? 'l' : 'p');
         }
-
-        // Add the page image
         doc.addImage(page.imageUrl, 'JPEG', 0, 0, page.width, page.height);
-
-        // Draw redactions
         const pageRedactions = redactions.filter(r => r.pageNumber === page.pageNumber);
-        doc.setFillColor(0, 0, 0); // Black
-
+        doc.setFillColor(0, 0, 0);
         pageRedactions.forEach(red => {
-          // Box coordinates are normalized 0-1000
           const x = (red.box.xmin / 1000) * page.width;
           const y = (red.box.ymin / 1000) * page.height;
           const w = ((red.box.xmax - red.box.xmin) / 1000) * page.width;
           const h = ((red.box.ymax - red.box.ymin) / 1000) * page.height;
-          
           doc.rect(x, y, w, h, 'F');
         });
       }
 
       const fileName = file ? file.name.replace('.pdf', '_anonimizowany.pdf') : 'dokument_anonimizowany.pdf';
       doc.save(fileName);
-      setProcessingStatus('Pobrano!');
+      setProcessingStatus('Pobieranie rozpoczęte!');
     } catch (error) {
       console.error("PDF Generation Error:", error);
-      alert("Błąd podczas generowania pliku PDF.");
+      setError("Błąd podczas generowania pliku PDF.");
     } finally {
       setIsProcessing(false);
       setTimeout(() => setProcessingStatus(''), 2000);
@@ -208,24 +211,26 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Header */}
+    <div className="min-h-screen flex flex-col bg-slate-50">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-2">
-          <div className="bg-indigo-600 p-2 rounded-lg">
+        <div className="flex items-center gap-3">
+          <div className="bg-indigo-600 p-2 rounded-xl shadow-indigo-200 shadow-lg">
             <ShieldCheck className="text-white w-6 h-6" />
           </div>
-          <h1 className="text-xl font-bold text-slate-800">SecureRedact AI</h1>
+          <div>
+            <h1 className="text-xl font-bold text-slate-800 leading-none">AnonimizatorPDF.AI</h1>
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">v1.2 • Bezpieczne Dane</span>
+          </div>
         </div>
         
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <button 
             disabled={isProcessing}
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors font-medium disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-all font-medium disabled:opacity-50"
           >
             <FileUp size={18} />
-            {file ? 'Zmień plik' : 'Wczytaj PDF'}
+            {file ? 'Zmień dokument' : 'Wczytaj plik PDF'}
           </button>
           
           <input 
@@ -240,13 +245,9 @@ export default function App() {
             <button 
               disabled={isProcessing}
               onClick={downloadRedactedPdf}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium shadow-sm disabled:bg-slate-400"
+              className="flex items-center gap-2 px-5 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all font-bold shadow-lg shadow-indigo-100 disabled:bg-slate-400"
             >
-              {isProcessing && processingStatus.includes('Generowanie') ? (
-                <Loader2 className="animate-spin" size={18} />
-              ) : (
-                <Download size={18} />
-              )}
+              <Download size={18} />
               Pobierz PDF
             </button>
           )}
@@ -254,159 +255,178 @@ export default function App() {
       </header>
 
       <main className="flex-1 flex overflow-hidden">
-        {/* Sidebar Controls */}
-        <aside className="w-80 border-r border-slate-200 bg-white overflow-y-auto p-6 space-y-8 print:hidden">
-          <section>
-            <div className="flex items-center gap-2 mb-4 text-slate-800 font-semibold uppercase text-xs tracking-wider">
-              <Settings size={14} />
-              Konfiguracja Anonimizacji
+        <aside className="w-80 border-r border-slate-200 bg-white overflow-y-auto p-6 space-y-8 print:hidden flex flex-col">
+          <section className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+            <div className="flex items-center gap-2 mb-2 text-indigo-800 font-bold text-sm uppercase tracking-tight">
+              <Info size={16} />
+              Instrukcja
             </div>
-            
-            <div className="space-y-3">
-              {Object.values(PiiCategory).map(cat => (
-                <label key={cat} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={settings.categories.includes(cat)}
-                    onChange={() => toggleCategory(cat)}
-                    className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-                  />
-                  <span className="text-sm text-slate-700">{cat}</span>
-                </label>
-              ))}
-            </div>
+            <ol className="text-xs text-indigo-700 space-y-2 list-decimal list-inside leading-relaxed opacity-90">
+              <li>Wgraj dokument PDF.</li>
+              <li>Wybierz kategorie danych.</li>
+              <li>Kliknij <strong>Uruchom AI</strong>.</li>
+              <li>Kliknij na pole, aby je usunąć ręcznie.</li>
+            </ol>
           </section>
 
-          <section>
-            <div className="flex items-center gap-2 mb-3 text-slate-800 font-semibold uppercase text-xs tracking-wider">
-              <AlertCircle size={14} />
-              Własne Słowa Kluczowe
+          {error && (
+            <div className="bg-red-50 border border-red-100 p-3 rounded-lg flex gap-3 text-red-700 text-xs animate-in fade-in slide-in-from-top-2 duration-300">
+              <AlertTriangle className="shrink-0" size={16} />
+              <div>
+                <p className="font-bold mb-1">Uwaga!</p>
+                <p>{error}</p>
+              </div>
             </div>
-            <div className="flex gap-2 mb-3">
-              <input 
-                type="text"
-                value={newKeyword}
-                onChange={(e) => setNewKeyword(e.target.value)}
-                placeholder="np. PESEL firmy"
-                className="flex-1 text-sm border border-slate-300 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                onKeyDown={(e) => e.key === 'Enter' && addKeyword()}
-              />
-              <button 
-                onClick={addKeyword}
-                className="bg-slate-100 p-1.5 rounded-md text-slate-600 hover:bg-slate-200 transition-colors"
-              >
-                Dodaj
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {settings.customKeywords.map(kw => (
-                <span key={kw} className="bg-slate-100 text-slate-700 text-xs px-2 py-1 rounded-full flex items-center gap-1 group">
-                  {kw}
-                  <button onClick={() => removeKeyword(kw)} className="text-slate-400 hover:text-red-500 transition-colors">
-                    <Trash2 size={10} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          </section>
+          )}
 
-          <section className="pt-6 border-t border-slate-100">
-            <button 
-              disabled={!file || isProcessing}
-              onClick={startAnonymization}
-              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isProcessing && !processingStatus.includes('Generowanie') ? <Loader2 className="animate-spin" size={20} /> : <ShieldCheck size={20} />}
-              {isProcessing && !processingStatus.includes('Generowanie') ? 'Analizowanie...' : 'Uruchom AI'}
-            </button>
-            {processingStatus && (
-              <p className="mt-3 text-center text-sm text-indigo-600 font-medium animate-pulse">
-                {processingStatus}
-              </p>
-            )}
-          </section>
+          <div className="flex-1 space-y-8 overflow-y-auto pr-1">
+            <section>
+              <div className="flex items-center gap-2 mb-4 text-slate-500 font-bold uppercase text-[10px] tracking-widest">
+                <Settings size={14} />
+                Konfiguracja AI
+              </div>
+              <div className="space-y-1">
+                {Object.values(PiiCategory).map(cat => (
+                  <label key={cat} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors group">
+                    <input 
+                      type="checkbox" 
+                      checked={settings.categories.includes(cat)}
+                      onChange={() => toggleCategory(cat)}
+                      className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-slate-700 group-hover:text-indigo-600 transition-colors">{cat}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
 
-          {redactions.length > 0 && (
-            <section className="pt-6 border-t border-slate-100">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-slate-800">Podgląd Danych</h3>
+            <section>
+              <div className="flex items-center gap-2 mb-3 text-slate-500 font-bold uppercase text-[10px] tracking-widest">
+                <AlertCircle size={14} />
+                Własne frazy
+              </div>
+              <div className="flex gap-2 mb-3">
+                <input 
+                  type="text"
+                  value={newKeyword}
+                  onChange={(e) => setNewKeyword(e.target.value)}
+                  placeholder="np. Tajna Firma"
+                  className="flex-1 text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                  onKeyDown={(e) => e.key === 'Enter' && addKeyword()}
+                />
                 <button 
-                  onClick={() => setShowSensitive(!showSensitive)}
-                  className="text-indigo-600 hover:underline text-xs flex items-center gap-1"
+                  onClick={addKeyword}
+                  className="bg-indigo-50 text-indigo-600 px-3 py-2 rounded-lg font-bold text-xs hover:bg-indigo-100 transition-colors"
                 >
-                  {showSensitive ? <EyeOff size={14} /> : <Eye size={14} />}
-                  {showSensitive ? 'Ukryj' : 'Pokaż'}
+                  Dodaj
                 </button>
               </div>
-              <div className="space-y-2">
-                <p className="text-xs text-slate-500 italic">Wykryto {redactions.length} elementów.</p>
-                <div className="max-h-60 overflow-y-auto pr-2 space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                {settings.customKeywords.map(k => (
+                  <span key={k} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-600 rounded-md text-[10px] font-bold">
+                    {k}
+                    <button onClick={() => removeKeyword(k)}><Trash2 size={10} /></button>
+                  </span>
+                ))}
+              </div>
+            </section>
+
+            {redactions.length > 0 && (
+              <section className="pt-6 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Wykryto ({redactions.length})</h3>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setShowSensitive(!showSensitive)}
+                      className="text-indigo-600 hover:bg-indigo-50 p-1 rounded transition-colors"
+                      title={showSensitive ? 'Ukryj tekst' : 'Pokaż tekst'}
+                    >
+                      {showSensitive ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                    <button 
+                      onClick={clearAllRedactions}
+                      className="text-red-500 hover:bg-red-50 p-1 rounded transition-colors"
+                      title="Resetuj"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
                   {redactions.map(r => (
-                    <div key={r.id} className="text-xs p-2 bg-slate-50 rounded border border-slate-100 flex items-center justify-between group">
+                    <div key={r.id} className="text-[11px] p-2.5 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-between group animate-in fade-in slide-in-from-left-2">
                       <div className="truncate pr-2">
-                        <span className="font-bold text-indigo-600 block mb-0.5">{r.category}</span>
-                        <span className={showSensitive ? '' : 'blur-[2px] select-none'}>{r.text}</span>
+                        <span className="font-bold text-indigo-600 block text-[9px] uppercase tracking-tighter">{r.category}</span>
+                        <span className={showSensitive ? 'text-slate-800' : 'bg-slate-200 text-transparent rounded px-1 select-none'}>
+                          {r.text || '...'}
+                        </span>
                       </div>
-                      <button 
-                        onClick={() => deleteRedaction(r.id)}
-                        className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
+                      <button onClick={() => deleteRedaction(r.id)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
                         <Trash2 size={12} />
                       </button>
                     </div>
                   ))}
                 </div>
-              </div>
-            </section>
-          )}
+              </section>
+            )}
+          </div>
+
+          <div className="pt-6 mt-auto">
+            <button 
+              disabled={!file || isProcessing}
+              onClick={startAnonymization}
+              className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 disabled:bg-slate-200 disabled:shadow-none disabled:cursor-not-allowed flex items-center justify-center gap-3 active:scale-95"
+            >
+              {isProcessing && !processingStatus.includes('Generowanie') ? (
+                <Loader2 className="animate-spin" size={20} />
+              ) : (
+                <ShieldCheck size={20} />
+              )}
+              {isProcessing && !processingStatus.includes('Generowanie') ? 'Analizowanie...' : 'Uruchom AI'}
+            </button>
+            {processingStatus && (
+              <p className="mt-3 text-center text-[11px] text-indigo-600 font-bold animate-pulse">
+                {processingStatus}
+              </p>
+            )}
+          </div>
         </aside>
 
-        {/* PDF Preview Area */}
-        <section className="flex-1 bg-slate-200 overflow-y-auto p-8 flex flex-col items-center gap-8 relative">
+        <section className="flex-1 bg-slate-100 overflow-y-auto p-12 flex flex-col items-center gap-8 relative scroll-smooth">
           {!file && !isProcessing && (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-4">
-              <FileUp size={64} className="stroke-1" />
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-6 animate-in fade-in zoom-in duration-500">
+              <div className="w-24 h-24 bg-white rounded-3xl shadow-xl flex items-center justify-center text-slate-300">
+                <FileUp size={48} className="stroke-1" />
+              </div>
               <div className="text-center">
-                <p className="text-lg font-medium text-slate-600">Wgraj dokument PDF, aby rozpocząć</p>
-                <p className="text-sm">Obsługujemy dokumenty urzędowe, faktury, umowy i inne.</p>
+                <p className="text-xl font-bold text-slate-800">Witaj w AnonimizatorPDF.AI</p>
+                <p className="text-sm text-slate-500 mt-2 max-w-xs">Twoje dokumenty są bezpieczne. Dane przetwarzane są tymczasowo w pamięci RAM przeglądarki i przez model Gemini AI.</p>
               </div>
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-4 px-6 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-all font-medium shadow-md"
-              >
-                Wybierz plik
-              </button>
             </div>
           )}
 
-          {isProcessing && pages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full">
-              <div className="relative">
-                <Loader2 className="w-16 h-16 text-indigo-600 animate-spin" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <ShieldCheck className="text-indigo-600 w-6 h-6" />
-                </div>
-              </div>
-              <p className="mt-4 text-slate-600 font-medium">{processingStatus}</p>
-            </div>
-          )}
-
-          <div className="space-y-12 max-w-4xl w-full">
+          <div className="space-y-12 max-w-4xl w-full pb-20">
             {pages.map(page => (
               <div 
                 key={page.pageNumber} 
-                className="relative bg-white shadow-2xl rounded-sm overflow-hidden mx-auto"
-                style={{ width: page.width / 1.5, height: page.height / 1.5 }} // Scale preview to fit screen nicely
+                className="relative bg-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] rounded-lg overflow-hidden mx-auto border border-slate-200 transition-all hover:shadow-[0_30px_60px_rgba(0,0,0,0.15)]"
+                style={{ width: page.width, height: page.height, transform: 'scale(1)', transformOrigin: 'top center' }}
               >
-                <img src={page.imageUrl} className="absolute inset-0 w-full h-full object-contain" alt={`Strona ${page.pageNumber}`} />
+                <img 
+                  src={page.imageUrl} 
+                  className="absolute inset-0 w-full h-full object-contain" 
+                  alt={`Strona ${page.pageNumber}`} 
+                  loading="lazy"
+                />
                 
-                {/* Redaction Overlays (Visual Only in Browser) */}
                 {redactions
                   .filter(r => r.pageNumber === page.pageNumber)
                   .map(red => (
                     <div 
                       key={red.id}
-                      className="absolute bg-black group transition-opacity"
+                      className="absolute bg-black group cursor-pointer transition-all hover:ring-2 hover:ring-red-400"
+                      onClick={() => deleteRedaction(red.id)}
+                      title={`Usuń: ${red.category}`}
                       style={{
                         top: `${red.box.ymin / 10}%`,
                         left: `${red.box.xmin / 10}%`,
@@ -414,43 +434,20 @@ export default function App() {
                         width: `${(red.box.xmax - red.box.xmin) / 10}%`,
                       }}
                     >
-                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-indigo-600/80 text-white text-[10px] flex items-center justify-center pointer-events-none transition-all overflow-hidden p-1">
-                        <span className="truncate">{red.category}</span>
+                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-red-500/20 flex items-center justify-center">
+                         <Trash2 className="text-white drop-shadow-md" size={14} />
                       </div>
-                      {/* Interaction delete */}
-                      <button 
-                        onClick={() => deleteRedaction(red.id)}
-                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-all z-10"
-                      >
-                        <Trash2 size={10} />
-                      </button>
                     </div>
                   ))}
-                  
-                {/* Page Number Badge */}
-                <div className="absolute top-4 right-4 bg-slate-800/20 backdrop-blur-md px-2 py-1 rounded text-[10px] font-bold text-slate-800">
-                  STRONA {page.pageNumber}
+                
+                <div className="absolute top-6 right-6 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-[10px] font-black text-slate-800 shadow-sm border border-slate-200">
+                  STRONA {page.pageNumber} / {pages.length}
                 </div>
               </div>
             ))}
           </div>
-
-          {/* Floating Action Badge */}
-          {redactions.length > 0 && (
-            <div className="fixed bottom-8 right-8 flex gap-3">
-              <div className="bg-white/80 backdrop-blur-md px-4 py-2 rounded-full border border-slate-200 shadow-xl flex items-center gap-2">
-                <CheckCircle2 className="text-green-500" size={16} />
-                <span className="text-xs font-bold text-slate-700">Aktywnych pól: {redactions.length}</span>
-              </div>
-            </div>
-          )}
         </section>
       </main>
-
-      <footer className="bg-white border-t border-slate-200 px-6 py-2 text-[10px] text-slate-400 flex justify-between items-center">
-        <div>Zasilane przez Gemini AI & jsPDF</div>
-        <div>Wszystkie dane są przetwarzane zgodnie z polityką prywatności API.</div>
-      </footer>
     </div>
   );
 }
