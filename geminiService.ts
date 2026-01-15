@@ -15,9 +15,14 @@ export const detectPiiInImage = async (
   targetCategories: PiiCategory[],
   customKeywords: string[]
 ): Promise<DetectionResult[]> => {
-  const apiKey = process.env.API_KEY || '';
-  const ai = new GoogleGenAI({ apiKey });
+  // Pobieramy klucz bezpośrednio z process.env.API_KEY (zgodnie z wytycznymi)
+  const apiKey = process.env.API_KEY;
   
+  if (!apiKey || apiKey === "UNDEFINED" || apiKey === "") {
+    throw new Error("Klucz API Gemini nie jest skonfigurowany. Upewnij się, że dodałeś API_KEY w ustawieniach Vercel (Environment Variables).");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const modelName = 'gemini-3-flash-preview';
   
   const categoryList = targetCategories.join(', ');
@@ -66,7 +71,7 @@ export const detectPiiInImage = async (
     
     try {
       const parsed = JSON.parse(resultText.trim());
-      // Rygorystyczne czyszczenie danych przed wysłaniem do Reacta
+      // Rygorystyczne rzutowanie na string, aby uniknąć błędów Reacta (Error #31)
       return (Array.isArray(parsed) ? parsed : []).map((item: any) => ({
         text: String(item.text || ''),
         category: (item.category || 'OTHER') as PiiCategory,
@@ -75,16 +80,14 @@ export const detectPiiInImage = async (
           : [0, 0, 0, 0]
       })) as DetectionResult[];
     } catch (e) {
-      console.error("Format błędu AI:", resultText);
+      console.error("Błąd formatu odpowiedzi AI:", resultText);
       return [];
     }
   } catch (error: any) {
-    if (error.message?.includes("API key not found") || error.message?.includes("invalid")) {
-      throw new Error("Klucz API Gemini nie jest skonfigurowany lub jest nieaktywny. Odśwież stronę i spróbuj ponownie.");
+    console.error("Błąd Gemini:", error);
+    if (error.message?.includes("not found") || error.message?.includes("key")) {
+      throw new Error("Klucz API jest nieprawidłowy lub wygasł. Sprawdź ustawienia w panelu Vercel.");
     }
-    if (error.message?.includes("429")) {
-      throw new Error("Darmowy limit zapytań Gemini został wyczerpany. Spróbuj ponownie za minutę.");
-    }
-    throw new Error("AI nie mogło przetworzyć tej strony: " + (error.message || "Błąd połączenia."));
+    throw new Error("AI nie mogło przeanalizować strony: " + (error.message || "Błąd połączenia."));
   }
 };
