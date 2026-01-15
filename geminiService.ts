@@ -1,13 +1,10 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
-import { PiiCategory, BoundingBox } from "./types";
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+import { PiiCategory } from "./types";
 
 export interface DetectionResult {
   text: string;
   category: PiiCategory;
-  box_2d: [number, number, number, number]; // [ymin, xmin, ymax, xmax]
+  box_2d: [number, number, number, number];
 }
 
 export const detectPiiInImage = async (
@@ -15,32 +12,30 @@ export const detectPiiInImage = async (
   targetCategories: PiiCategory[],
   customKeywords: string[]
 ): Promise<DetectionResult[]> => {
+  const apiKey = process.env.API_KEY;
+  
+  if (!apiKey || apiKey === "UNDEFINED" || apiKey.length < 10) {
+    throw new Error("Klucz API nie został skonfigurowany. Dodaj API_KEY w ustawieniach Vercel (Environment Variables).");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const model = 'gemini-3-flash-preview';
   
   const categoryList = targetCategories.join(', ');
   const keywordsText = customKeywords.length > 0 
-    ? ` Additionally, specifically look for these keywords: ${customKeywords.join(', ')}.`
+    ? ` Dodatkowo oznacz te konkretne frazy: ${customKeywords.join(', ')}.`
     : '';
 
-  const prompt = `Analyze this document image for Personal Identifiable Information (PII). 
-  Identify the following categories: ${categoryList}.${keywordsText}
-  
-  For each detected PII, provide the exact text, the category, and a precise bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000.
-  Ensure the bounding boxes strictly cover only the sensitive text.
-  
-  Return the results as a JSON array.`;
+  const prompt = `Jesteś ekspertem RODO. Znajdź i oznacz dane wrażliwe na obrazie dokumentu.
+  Kategorie do wykrycia: ${categoryList}.${keywordsText}
+  Zwróć JSON jako tablicę obiektów {text, category, box_2d: [ymin, xmin, ymax, xmax] (skala 0-1000)}.`;
 
   try {
     const response = await ai.models.generateContent({
       model,
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: base64Image,
-            },
-          },
+          { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
           { text: prompt },
         ],
       },
@@ -55,8 +50,7 @@ export const detectPiiInImage = async (
               category: { type: Type.STRING },
               box_2d: {
                 type: Type.ARRAY,
-                items: { type: Type.NUMBER },
-                description: "[ymin, xmin, ymax, xmax] coordinates"
+                items: { type: Type.NUMBER }
               }
             },
             required: ["text", "category", "box_2d"]
@@ -65,10 +59,10 @@ export const detectPiiInImage = async (
       },
     });
 
-    const results = JSON.parse(response.text || '[]') as DetectionResult[];
-    return results;
-  } catch (error) {
-    console.error("Gemini Detection Error:", error);
-    return [];
+    if (!response.text) return [];
+    return JSON.parse(response.text.trim());
+  } catch (error: any) {
+    console.error("Gemini Error:", error);
+    throw new Error("Błąd podczas analizy strony przez AI. Spróbuj ponownie za chwilę.");
   }
 };
